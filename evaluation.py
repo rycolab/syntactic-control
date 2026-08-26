@@ -17,9 +17,15 @@ from tokenization.lm import load_model_by_name, load_model_by_name_llama
 def main(args):
     N = tetratagger.Potential()
     
-    # nlp = spacy.blank("en") 
-    spacy.cli.download("en_core_web_md")
-    benepar.download("benepar_en3")
+    # nlp = spacy.blank("en")
+    try:
+        spacy.cli.download("en_core_web_md")
+    except Exception as e:
+        print(f"spacy download skipped (already installed / offline?): {e}")
+    try:
+        benepar.download("benepar_en3")
+    except Exception as e:
+        print(f"benepar download skipped (already installed / offline?): {e}")
 
     nlp = spacy.load("en_core_web_md")
     if spacy.__version__.startswith("2"):
@@ -27,7 +33,6 @@ def main(args):
     else:
         nlp.add_pipe("benepar", config={"model": "benepar_en3"})
     trees = read_file(args.dataset_trees_file_path)
-    trees=trees[:2]
 
     # sentences corresponding to trees dataset 
     n_s = read_file(args.dataset_sents_file_path)
@@ -178,6 +183,58 @@ def main(args):
     print(f"Accuracy constituents:{np.mean(np.array(mean_acc_scores))}, {np.std(np.array(mean_acc_scores))}")
     print(f"Exact Matches: {np.mean(np.array(exact_matches))}, {np.std(np.array(exact_matches))}")
     print(f"Exact Structures: {np.mean(np.array(exact_structure))}, {np.std(np.array(exact_structure))}")
+
+    # Dump the evaluation metrics (mean, std over runtimes) to JSON.
+    import json
+    metrics = {
+        "config": {
+            "model_string": args.model_string,
+            "tetratagger_model_string": args.tetratagger_model_string,
+            "conditioning_model_path": args.conditioning_model_path,
+            "dataset_trees_file_path": args.dataset_trees_file_path,
+            "proposal": args.proposal,
+            "K": args.K,
+            "particles": args.particles,
+            "threshold": args.threshold,
+            "tetra": args.tetra,
+            "runtimes": args.runtimes,
+            "shots": args.shots,
+            "n_trees": len(trees),
+        },
+        "log_llh_median": [float(np.mean(median_llh)), float(np.std(median_llh))],
+        "prior_logp": [float(np.mean(mean_logp)), float(np.std(mean_logp))],
+        "diversity_uni": [float(np.mean(uni_diversities)), float(np.std(uni_diversities))],
+        "diversity_bi": [float(np.mean(bi_diversities)), float(np.std(bi_diversities))],
+        "diversity_tri": [float(np.mean(tri_diversities)), float(np.std(tri_diversities))],
+        "f1": [float(np.mean(mean_f1_scores)), float(np.std(mean_f1_scores))],
+        "constituent_accuracy": [float(np.mean(mean_acc_scores)), float(np.std(mean_acc_scores))],
+        "exact_match": [float(np.mean(exact_matches)), float(np.std(exact_matches))],
+        "exact_structure": [float(np.mean(exact_structure)), float(np.std(exact_structure))],
+    }
+    with open(f"{args.output_prefix}_metrics.json", "w") as f:
+        json.dump(metrics, f, indent=2)
+    print(f"Saved metrics to {args.output_prefix}_metrics.json")
+
+    # Dump generated sentences: one .txt line-aligned with the input trees file
+    # (first runtime), plus a JSON with all runtimes and log-probabilities.
+    n = len(trees)
+    with open(f"{args.output_prefix}_sentences.txt", "w") as f:
+        for j in range(n):
+            f.write(all_sentences[j].lstrip() + "\n")
+    with open(f"{args.output_prefix}_results.json", "w") as f:
+        json.dump(
+            {
+                "trees": trees,
+                "runs": [
+                    [all_sentences[r * n + j].lstrip() for j in range(n)]
+                    for r in range(args.runtimes)
+                ],
+                "logps": [float(x) for x in all_logps],
+            },
+            f,
+            indent=2,
+        )
+    print(f"Saved generated sentences to {args.output_prefix}_sentences.txt and {args.output_prefix}_results.json")
 
 
 def ptb_unescape(sent):
@@ -441,6 +498,13 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="# shots for instruction-tuned models. We support 0 and 5 shots here.",
+    )
+
+    parser.add_argument(
+        "--output_prefix",
+        type=str,
+        default="generated",
+        help="Prefix for the output files with generated sentences.",
     )
 
     args = parser.parse_args()
